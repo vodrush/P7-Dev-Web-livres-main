@@ -105,11 +105,11 @@ books.forEach(async (book) => {
     try {
         const image = fs.readFileSync(book.imagePath);
         const imageBase64 = image.toString('base64');
-        const mimeType = 'image/jpeg'; // Assurez-vous que c'est le bon type MIME pour votre image
+        const mimeType = 'image/jpeg'; 
 
         const response = await axios.post('http://localhost:3000/api/books', {
             book: JSON.stringify({
-                userId: "6728f9b23756570ca10aeca0", // Remplacer par un vrai userId si disponible
+                userId: "6728f9b23756570ca10aeca0",
                 title: book.title,
                 author: book.author,
                 year: book.year,

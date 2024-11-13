@@ -23,7 +23,6 @@ app.use(express.urlencoded({ extended: true }));
 
 // Parser les données JSON
 app.use(express.json());
-console.log("Middleware JSON et form-data actifs.");
 
 // Connexion à MongoDB
 mongoose.connect(process.env.MONGO_URI)
