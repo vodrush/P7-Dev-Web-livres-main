@@ -4,6 +4,8 @@ const router = express.Router();
 const path = require('path');
 const multer = require('multer');
 const Book = require(path.resolve(__dirname, '../models/Bookshema'));
+const authenticateToken = require('../middlewares/authenticateToken');
+const checkOwnership = require('../middlewares/checkownership');
 
 // Configure multer pour stocker l'image en mémoire
 const storage = multer.memoryStorage();
@@ -12,7 +14,7 @@ const upload = multer({ storage });
 
 
 // Route POST pour ajouter un livre avec image
-router.post('/', upload.single('image'), async (req, res) => {
+router.post('/', authenticateToken, upload.single('image'), async (req, res) => {
     console.log("Requête reçue sur /api/books");
 
     // Parse 'book' JSON encodé
@@ -40,12 +42,12 @@ router.post('/', upload.single('image'), async (req, res) => {
     if (req.file) {
         try {
             console.log("Taille de l'image avant optimisation :", req.file.size);
-            
+
             const optimizedImageBuffer = await sharp(req.file.buffer)
                 .resize({ width: 800 })
-                .jpeg({ quality: 80 }) 
+                .jpeg({ quality: 80 })
                 .toBuffer();
-            
+
             console.log("Taille de l'image après optimisation :", optimizedImageBuffer.length);
 
             const mimeType = 'image/jpeg';
@@ -81,13 +83,13 @@ router.post('/', upload.single('image'), async (req, res) => {
 });
 
 // Route GET pour récupérer les livres les mieux notés
-router.get('/bestrating', async (req, res) => {
+router.get('/bestrating', authenticateToken, async (req, res) => {
     console.log("Requête reçue sur /bestrating");
 
     try {
         // Requête simplifiée pour obtenir les livres triés par averageRating décroissant
         const bestRatedBooks = await Book.find().sort({ averageRating: -1 }).limit(3);
-        
+
         if (!bestRatedBooks || bestRatedBooks.length === 0) {
             return res.status(404).json({ error: "Aucun livre trouvé avec une note moyenne." });
         }
@@ -103,126 +105,137 @@ router.get('/bestrating', async (req, res) => {
 
 
 
-    // Route GET pour récupérer l'image d'un livre spécifique
-    router.get('/:id/image', async (req, res) => {
+// Route GET pour récupérer l'image d'un livre spécifique
+router.get('/:id/image', authenticateToken, async (req, res) => {
+    try {
+        const book = await Book.findById(req.params.id);
+
+        if (!book || !book.image) {
+            return res.status(404).json({ error: "Image non trouvée pour ce livre." });
+        }
+        const mimeType = "image/jpeg";
+        res.set('Content-Type', mimeType);
+        res.send(book.image);
+    } catch (error) {
+        console.error("Erreur lors de la récupération de l'image :", error);
+        res.status(500).json({ error: "Erreur lors de la récupération de l'image." });
+    }
+});
+
+
+// Route GET pour récupérer tous les livres avec image encodée en base64
+router.get('/', authenticateToken, async (req, res) => {
+    try {
+        const books = await Book.find(); // Récupère tous les livres
+
+        // Convertir chaque image en base64 avec le bon type MIME
+        const booksWithBase64Images = books.map(book => {
+            if (book.image) {
+                const mimeType = "image/jpg";
+                return {
+                    ...book._doc, // Inclure toutes les propriétés du livre
+                    image: `data:${mimeType};base64,${book.image.toString('base64')}`
+                };
+            }
+            return book;
+        });
+
+        res.status(200).json(booksWithBase64Images);
+    } catch (error) {
+        console.error("Erreur lors de la récupération des livres :", error);
+        res.status(500).json({ error: "Erreur lors de la récupération des livres." });
+    }
+});
+// Route GET pour récupérer un livre spécifique par son ID
+const mongoose = require('mongoose');
+
+router.get('/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    const { userId } = req.user;
+    console.log("Utilisateur connecté :", req.user); // Log les infos utilisateur décodées du token
+    console.log("ID du livre demandé :", req.params.id);
+
+    console.log("Token décodé, userId :", userId); // Log l'userId extrait du token
+    console.log("ID du livre reçu :", id); // Log l'ID du livre reçu
+
+    // Vérification de la validité de l'ID du livre
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+        console.error("ID de livre invalide :", id);
+        return res.status(400).json({ error: "ID de livre invalide." });
+    }
+
+    try {
+        // Rechercher le livre dans la base de données
+        const book = await Book.findById(id);
+
+        if (!book) {
+            console.error("Livre non trouvé :", id);
+            return res.status(404).json({ error: "Livre non trouvé." });
+        }
+
+        // Vérifier si l'utilisateur connecté est l'auteur du livre
+        const isAuthor = book.userId.toString() === userId;
+        console.log("Utilisateur connecté est l'auteur :", isAuthor);
+
+        res.status(200).json({ ...book.toObject(), isAuthor });
+    } catch (error) {
+        console.error("Erreur lors de la récupération du livre :", error);
+        res.status(500).json({ error: "Erreur lors de la récupération du livre." });
+    }
+});
+
+
+router.post('/:id/rating', authenticateToken, async (req, res) => {
+    const bookId = req.params.id;
+    let { userId, grade } = req.body;
+
+    console.log("ID du livre reçu :", bookId);
+    console.log("Données de notation reçues :", { userId, grade });
+
+
+    if (grade === undefined) {
         try {
-            const book = await Book.findById(req.params.id);
-
-            if (!book || !book.image) {
-                return res.status(404).json({ error: "Image non trouvée pour ce livre." });
-            }
-            const mimeType = "image/jpeg"; 
-            res.set('Content-Type', mimeType);
-            res.send(book.image);
+            grade = parseInt(req.body.rating || req.body.grade, 10);
         } catch (error) {
-            console.error("Erreur lors de la récupération de l'image :", error);
-            res.status(500).json({ error: "Erreur lors de la récupération de l'image." });
+            console.error("Erreur lors de la conversion de la note :", error);
         }
-    });
+    }
 
+    // Vérifiez la validité de l'ID du livre et des données de notation
+    if (!mongoose.Types.ObjectId.isValid(bookId) || !userId || grade === undefined || isNaN(grade)) {
+        console.error("Données invalides ou incomplètes pour la notation.");
+        return res.status(400).json({ error: "Données de notation incomplètes ou ID de livre invalide." });
+    }
 
-    // Route GET pour récupérer tous les livres avec image encodée en base64
-    router.get('/', async (req, res) => {
-        try {
-            const books = await Book.find();
+    try {
+        const book = await Book.findById(bookId);
 
-            // Convertir chaque image en base64 avec le bon type MIME
-            const booksWithBase64Images = books.map(book => {
-                if (book.image) {
-                    const mimeType = "image/jpg";
-                    return {
-                        ...book._doc, // Inclure toutes les propriétés du livre
-                        image: `data:${mimeType};base64,${book.image.toString('base64')}`
-                    };
-                }
-                return book;
-            });
-
-            res.status(200).json(booksWithBase64Images);
-        } catch (error) {
-            console.error("Erreur lors de la récupération des livres :", error);
-            res.status(500).json({ error: "Erreur lors de la récupération des livres." });
-        }
-    });
-    // Route GET pour récupérer un livre spécifique par son ID
-    const mongoose = require('mongoose');
-    router.get('/:id', async (req, res) => {
-        const { id } = req.params;
-        const userId = req.headers['user-id'];
-
-        // Vérification de la validité de l'ID
-        if (!mongoose.Types.ObjectId.isValid(id)) {
-            return res.status(400).json({ error: "ID de livre invalide." });
+        if (!book) {
+            return res.status(404).json({ error: "Livre non trouvé." });
         }
 
-        try {
-            const book = await Book.findById(id);
-
-            if (!book) {
-                return res.status(404).json({ error: "Livre non trouvé." });
-            }
-
-            // Vérifiez si l'utilisateur connecté est l'auteur du livre
-            const isAuthor = book.authorId && book.authorId.toString() === userId;
-
-            res.status(200).json({ ...book.toObject(), isAuthor });
-        } catch (error) {
-            console.error("Erreur lors de la récupération du livre :", error);
-            res.status(500).json({ error: "Erreur lors de la récupération du livre." });
-        }
-    });
-
-    router.post('/:id/rating', async (req, res) => {
-        const bookId = req.params.id;
-        let { userId, grade } = req.body;
-
-        console.log("ID du livre reçu :", bookId);
-        console.log("Données de notation reçues :", { userId, grade });
-
-
-        if (grade === undefined) {
-            try {
-                grade = parseInt(req.body.rating || req.body.grade, 10);
-            } catch (error) {
-                console.error("Erreur lors de la conversion de la note :", error);
-            }
+        const existingRating = book.ratings.find(rating => rating.userId.toString() === userId);
+        if (existingRating) {
+            return res.status(400).json({ error: "Vous avez déjà noté ce livre." });
         }
 
-        // Vérifiez la validité de l'ID du livre et des données de notation
-        if (!mongoose.Types.ObjectId.isValid(bookId) || !userId || grade === undefined || isNaN(grade)) {
-            console.error("Données invalides ou incomplètes pour la notation.");
-            return res.status(400).json({ error: "Données de notation incomplètes ou ID de livre invalide." });
-        }
+        book.ratings.push({ userId, grade });
 
-        try {
-            const book = await Book.findById(bookId);
+        const totalRatings = book.ratings.length;
+        const sumRatings = book.ratings.reduce((sum, rating) => sum + (rating.grade || 0), 0);
+        const newAverageRating = totalRatings > 0 ? sumRatings / totalRatings : 0;
 
-            if (!book) {
-                return res.status(404).json({ error: "Livre non trouvé." });
-            }
+        book.averageRating = newAverageRating;
 
-            const existingRating = book.ratings.find(rating => rating.userId.toString() === userId);
-            if (existingRating) {
-                return res.status(400).json({ error: "Vous avez déjà noté ce livre." });
-            }
-
-            book.ratings.push({ userId, grade });
-
-            const totalRatings = book.ratings.length;
-            const sumRatings = book.ratings.reduce((sum, rating) => sum + (rating.grade || 0), 0);
-            const newAverageRating = totalRatings > 0 ? sumRatings / totalRatings : 0;
-
-            book.averageRating = newAverageRating;
-
-            await book.save();
-            res.status(200).json(book);
-        } catch (error) {
-            console.error("Erreur lors de l'ajout de la note :", error);
-            res.status(500).json({ error: "Erreur lors de l'ajout de la note." });
-        }
-    });
+        await book.save();
+        res.status(200).json(book);
+    } catch (error) {
+        console.error("Erreur lors de l'ajout de la note :", error);
+        res.status(500).json({ error: "Erreur lors de l'ajout de la note." });
+    }
+});
 // Route DELETE pour supprimer un livre par son ID
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', authenticateToken, checkOwnership, async (req, res) => {
     const { id } = req.params;
 
     console.log("Requête de suppression reçue pour le livre avec l'ID :", id);
@@ -247,7 +260,7 @@ router.delete('/:id', async (req, res) => {
     }
 });
 // Route PUT pour mettre à jour un livre par ID
-router.put('/:id', upload.single('image'), async (req, res) => {
+router.put('/:id', authenticateToken, checkOwnership, upload.single('image'), async (req, res) => {
     const { id } = req.params;
 
     // Vérification de la validité de l'ID
@@ -275,7 +288,7 @@ router.put('/:id', upload.single('image'), async (req, res) => {
 
         const { userId, title, author, year, genre } = bookData;
 
- 
+
         if (!year || isNaN(Number(year))) {
             console.error("L'année fournie est invalide :", year);
             return res.status(400).json({ error: "L'année fournie est invalide." });
@@ -288,14 +301,14 @@ router.put('/:id', upload.single('image'), async (req, res) => {
         if (req.file) {
             try {
                 console.log("Taille de l'image avant optimisation :", req.file.size);
-                
+
                 const optimizedImageBuffer = await sharp(req.file.buffer)
                     .resize({ width: 800 })
-                    .jpeg({ quality: 80 }) 
+                    .jpeg({ quality: 80 })
                     .toBuffer();
-                
+
                 console.log("Taille de l'image après optimisation :", optimizedImageBuffer.length);
-    
+
                 const mimeType = 'image/jpeg';
                 imageBase64 = `data:${mimeType};base64,${optimizedImageBuffer.toString('base64')}`;
             } catch (err) {

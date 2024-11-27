@@ -1,54 +1,63 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const bodyParser = require('body-parser');
-const path = require('path');
+const cookieParser = require('cookie-parser');
 const cors = require('cors');
-const open = require('open');
+const path = require('path');
 require('dotenv').config();
-require('app-module-path').addPath(__dirname);
+const authenticateToken = require('./middlewares/authenticateToken');
+
 const userRoutes = require('./routes/UserRoutes');
-const bookRoutes = require(path.join(__dirname, 'Routes', 'BookRoutes.js'));
+const bookRoutes = require('./routes/BookRoutes');
 
 const app = express();
 const port = process.env.PORT || 3000;
 
-app.use(cors());
+// Middleware CORS pour autoriser les cookies
+app.use(cors({
+    origin: 'http://localhost:3000', 
+    credentials: true, // Autorise l'envoi et la réception des cookies
+}));
+
+// Middleware pour parser les cookies
+app.use(cookieParser());
+
+// Middleware pour parser les corps des requêtes
 app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
 
-
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-// Parser les données x-www-form-urlencoded pour les formulaires classiques
-app.use(express.urlencoded({ extended: true }));
-
-// Parser les données JSON
-app.use(express.json());
-
-// Connexion à MongoDB
-mongoose.connect(process.env.MONGO_URI)
-    .then(() => console.log("Connexion à MongoDB réussie !"))
-    .catch(err => console.log("Connexion à MongoDB échouée :", err));
-
-// Utilisation des routes utilisateur
-app.use('/api/auth', userRoutes);
-
-// Utilisation des routes des livres
-app.use('/api/books', bookRoutes);
-
+// Logs de debug
 app.use((req, res, next) => {
     console.log(`Requête reçue : ${req.method} ${req.url}`);
-    console.log('Body reçu :', req.body);
+    console.log('Headers reçus :', req.headers);
+    console.log('Cookies reçus :', req.cookies);
     next();
 });
 
-// Servir les fichiers statiques du frontend
-app.use(express.static(path.join(__dirname, 'build')));
+// Connexion à MongoDB
+mongoose.connect(process.env.MONGO_URI)
+    .then(() => console.log('Connexion à MongoDB réussie !'))
+    .catch(err => console.error('Connexion à MongoDB échouée :', err));
 
-// Route de fallback pour le frontend
+// Routes utilisateur
+app.use('/api/auth', userRoutes);
+
+// Routes livres
+app.use('/api/books', authenticateToken, bookRoutes);
+
+// Route pour servir le frontend React
+app.use(express.static(path.join(__dirname, 'build')));
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });
 
+// Middleware global pour gérer les erreurs
+app.use((err, req, res, next) => {
+    console.error("Erreur détectée :", err);
+    res.status(500).json({ message: "Erreur interne du serveur." });
+});
+
+// Démarrage du serveur
 app.listen(port, () => {
     console.log(`Serveur backend en cours d'exécution sur le port ${port}`);
 });
